@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
-import { Upload, FileText, AlertCircle, CheckCircle, Users, TrendingUp, AlertTriangle, Filter, Square, CheckSquare } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Users, TrendingUp, AlertTriangle, Filter, Square, CheckSquare, RefreshCw } from 'lucide-react';
+
+const GOOGLE_SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/1zJZ5m-AVmiz1UHrAJCwKrLI0gW3aR04n/export?format=csv';
 
 export default function TeachingGapDashboard() {
   const [rawData, setRawData] = useState([]); // Almacena todos los datos cargados
@@ -95,6 +97,85 @@ export default function TeachingGapDashboard() {
     return result;
   };
 
+  // Función centralizada para procesar el texto CSV
+  const processCSVText = (text, sourceName) => {
+    try {
+      const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
+
+      if (lines.length < 2) {
+        throw new Error("El archivo parece estar vacío o no tiene datos suficientes.");
+      }
+
+      const delimiter = detectDelimiter(text);
+
+      // Limpiar encabezados de BOM y comillas
+      const headers = parseCSVLine(lines[0], delimiter).map(h =>
+        h.trim().replace(/^"|"$/g, '').replace(/^\uFEFF/, '')
+      );
+
+      // Validar columnas requeridas (Añadimos REGLAB_UNIFICADO)
+      const requiredCols = ['GRUPO_ESP_SUBESP', 'CAPACIT_DOC_UNIFICADO', 'REGLAB_UNIFICADO'];
+      const missingCols = requiredCols.filter(col => !headers.includes(col));
+
+      if (missingCols.length > 0) {
+        throw new Error(`Faltan columnas requeridas en el CSV: ${missingCols.join(', ')}. Verifica los nombres de los encabezados.`);
+      }
+
+      const parsedData = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const currentLine = parseCSVLine(lines[i], delimiter);
+        // Permitir cierta flexibilidad en la longitud de la línea
+        if (currentLine.length > 1) {
+          const obj = {};
+          headers.forEach((header, index) => {
+            let val = currentLine[index] || '';
+            val = val.trim().replace(/^"|"$/g, '');
+            obj[header] = val;
+          });
+          parsedData.push(obj);
+        }
+      }
+
+      if (parsedData.length === 0) {
+        throw new Error("No se pudieron extraer datos válidos del archivo.");
+      }
+
+      setRawData(parsedData);
+      setFileName(sourceName);
+      setReglabFilter([]); // Resetear filtro
+      setError(null);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Error al procesar los datos.");
+      setRawData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchGoogleSheetData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(GOOGLE_SHEET_CSV_URL);
+      if (!response.ok) {
+        throw new Error(`Error al conectar con Google Sheets: ${response.statusText}`);
+      }
+      const text = await response.text();
+      processCSVText(text, 'Google Sheets (Automático)');
+    } catch (err) {
+      console.error(err);
+      setError(`No se pudo cargar desde Google Sheets: ${err.message}. Puedes intentar subir el archivo manualmente.`);
+      setLoading(false);
+    }
+  };
+
+  // Cargar datos automáticamente al iniciar
+  useEffect(() => {
+    fetchGoogleSheetData();
+  }, []);
+
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -105,65 +186,13 @@ export default function TeachingGapDashboard() {
       return;
     }
 
-    setFileName(file.name);
     setLoading(true);
     setError(null);
-    setReglabFilter([]); // Resetear filtro al cargar nuevo archivo
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      try {
-        const text = e.target.result;
-        const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
-
-        if (lines.length < 2) {
-          throw new Error("El archivo parece estar vacío o no tiene datos suficientes.");
-        }
-
-        const delimiter = detectDelimiter(text);
-
-        // Limpiar encabezados de BOM y comillas
-        const headers = parseCSVLine(lines[0], delimiter).map(h =>
-          h.trim().replace(/^"|"$/g, '').replace(/^\uFEFF/, '')
-        );
-
-        // Validar columnas requeridas (Añadimos REGLAB_UNIFICADO)
-        const requiredCols = ['GRUPO_ESP_SUBESP', 'CAPACIT_DOC_UNIFICADO', 'REGLAB_UNIFICADO'];
-        const missingCols = requiredCols.filter(col => !headers.includes(col));
-
-        if (missingCols.length > 0) {
-          throw new Error(`Faltan columnas requeridas en el CSV: ${missingCols.join(', ')}. Verifica los nombres de los encabezados.`);
-        }
-
-        const parsedData = [];
-
-        for (let i = 1; i < lines.length; i++) {
-          const currentLine = parseCSVLine(lines[i], delimiter);
-          // Permitir cierta flexibilidad en la longitud de la línea
-          if (currentLine.length > 1) {
-            const obj = {};
-            headers.forEach((header, index) => {
-              let val = currentLine[index] || '';
-              val = val.trim().replace(/^"|"$/g, '');
-              obj[header] = val;
-            });
-            parsedData.push(obj);
-          }
-        }
-
-        if (parsedData.length === 0) {
-          throw new Error("No se pudieron extraer datos válidos del archivo.");
-        }
-
-        setRawData(parsedData); // Guardar todos los datos
-        // El useEffect se encarga de procesar y filtrar
-      } catch (err) {
-        console.error(err);
-        setError(err.message || "Error al procesar el archivo.");
-        setRawData([]);
-      } finally {
-        setLoading(false);
-      }
+      const text = e.target.result;
+      processCSVText(text, file.name);
     };
 
     reader.onerror = () => {
@@ -171,7 +200,7 @@ export default function TeachingGapDashboard() {
       setLoading(false);
     };
 
-    reader.readAsText(file, 'ISO-8859-1'); // Intentar leer con codificación común en latam, o fallback a UTF-8 implícito del navegador si falla
+    reader.readAsText(file, 'ISO-8859-1');
   };
 
   const processData = (currentData) => {
@@ -308,14 +337,26 @@ export default function TeachingGapDashboard() {
                   <Upload className="w-12 h-12 text-slate-400 mb-3 group-hover:text-blue-500 transition-colors" />
                 )}
                 <h3 className="text-lg font-medium text-slate-700">
-                  {loading ? 'Procesando...' : 'Carga tu archivo CSV'}
+                  {loading ? 'Cargando datos...' : 'Carga tu archivo CSV manualmente'}
                 </h3>
                 <p className="text-sm text-slate-500 mt-1">Soporta delimitadores de coma (,) o punto y coma (;). Requiere las columnas: GRUPO_ESP_SUBESP, CAPACIT_DOC_UNIFICADO, REGLAB_UNIFICADO.</p>
                 {error && (
-                  <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-md flex items-center gap-2 max-w-md mx-auto">
+                  <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-md flex items-center gap-2 max-w-md mx-auto z-20 relative">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                     {error}
                   </div>
+                )}
+                {!loading && error && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation(); // Evitar que abra el file dialog
+                      e.preventDefault();
+                      fetchGoogleSheetData();
+                    }}
+                    className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 z-20 relative flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Reintentar Carga Automática
+                  </button>
                 )}
               </div>
             </div>
@@ -324,16 +365,26 @@ export default function TeachingGapDashboard() {
               <div className="flex items-center gap-3">
                 <FileText className="w-6 h-6 text-blue-600" />
                 <div>
-                  <p className="font-medium text-blue-900">Archivo cargado: {fileName}</p>
+                  <p className="font-medium text-blue-900">Fuente: {fileName}</p>
                   <p className="text-xs text-blue-700">{rawData.length} Registros totales</p>
                 </div>
               </div>
-              <button
-                onClick={() => { setRawData([]); setData([]); setError(null); setFileName(null); setReglabFilter([]); }}
-                className="text-sm text-red-500 hover:text-red-700 font-medium px-3 py-1 border border-red-200 rounded-md bg-white hover:bg-red-50"
-              >
-                Reiniciar / Cargar otro
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={fetchGoogleSheetData}
+                  className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 border border-blue-200 rounded-md bg-white hover:bg-blue-50 flex items-center gap-2"
+                  disabled={loading}
+                >
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  {loading ? 'Actualizando...' : 'Actualizar'}
+                </button>
+                <button
+                  onClick={() => { setRawData([]); setData([]); setError(null); setFileName(null); setReglabFilter([]); }}
+                  className="text-sm text-red-500 hover:text-red-700 font-medium px-3 py-1 border border-red-200 rounded-md bg-white hover:bg-red-50"
+                >
+                  Reiniciar / Cargar otro
+                </button>
+              </div>
             </div>
           )}
         </div>
